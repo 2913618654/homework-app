@@ -22,7 +22,8 @@ jobs:
       - name: Prepare and Build APK
         run: |
           cd homework_aggregator_android
-          # 1. 自动生成真实的自适应应用图标，解决 AAPT 缺少 mipmap 报错
+
+          # 1. 自动生成自适应应用图标
           mkdir -p app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
           cat << 'EOF' > app/src/main/res/drawable/ic_launcher_foreground.xml
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -43,9 +44,432 @@ jobs:
           </adaptive-icon>
           EOF
           cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+
           # 2. 补全 CardView 依赖
           echo "dependencies { implementation 'androidx.cardview:cardview:1.0.0' }" >> app/build.gradle
-          # 3. 生成 Gradle Wrapper 并开始编译
+
+          # 3. 注入直接携带 Cookie 头的防拦截通信服务
+          cat << 'EOF' > app/src/main/java/com/homework/assistant/service/ChaoXingService.kt
+          package com.homework.assistant.service
+
+          import com.google.gson.JsonParser
+          import com.homework.assistant.model.CourseItem
+          import com.homework.assistant.model.HomeworkItem
+          import okhttp3.OkHttpClient
+          import okhttp3.Request
+          import org.jsoup.Jsoup
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
+          import java.util.concurrent.TimeUnit
+          import java.util.regex.Pattern
+
+          class ChaoXingService(private val rawCookie: String) {
+
+              private val cookieStr: String = rawCookie.trim().removeSurrounding("'", "'").removeSurrounding("\"", "\"")
+
+              private val client: OkHttpClient = OkHttpClient.Builder()
+                  .connectTimeout(15, TimeUnit.SECONDS)
+                  .readTimeout(15, TimeUnit.SECONDS)
+                  .followRedirects(true)
+                  .followSslRedirects(true)
+                  .build()
+
+              private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+              fun getCourses(): List<CourseItem> {
+                  val list = mutableListOf<CourseItem>()
+                  if (cookieStr.isBlank()) return list
+
+                  val url = "https://mooc1-api.chaoxing.com/mycourse/backclazzdata"
+                  val request = Request.Builder()
+                      .url(url)
+                      .header("User-Agent", userAgent)
+                      .header("Cookie", cookieStr)
+                      .header("Accept", "application/json, text/plain, */*")
+                      .build()
+
+                  try {
+                      val response = client.newCall(request).execute()
+                      val body = response.body?.string() ?: return list
+                      val json = JsonParser.parseString(body).asJsonObject
+                      if (json.has("result") && json.get("result").asInt == 1) {
+                          val channelList = json.getAsJsonArray("channelList")
+                          for (elem in channelList) {
+                              val obj = elem.asJsonObject
+                              val content = obj.getAsJsonObject("content") ?: continue
+                              val classId = if (content.has("id")) content.get("id").asString else obj.get("key").asString
+                              val cpi = if (content.has("cpi")) content.get("cpi").asString else ""
+                              val courseObj = content.getAsJsonObject("course") ?: continue
+                              val dataArr = courseObj.getAsJsonArray("data") ?: continue
+                              if (dataArr.size() > 0) {
+                                  val cData = dataArr[0].asJsonObject
+                                  val courseId = cData.get("id").asString
+                                  val courseName = cData.get("name").asString
+                                  val teacher = if (cData.has("teacherfactor")) cData.get("teacherfactor").asString else ""
+                                  list.add(CourseItem(courseId, classId, cpi, courseName, teacher))
+                              }
+                          }
+                      }
+                  } catch (e: Exception) {
+                      e.printStackTrace()
+                  }
+                  return list
+              }
+
+              fun getAllHomeworks(): List<HomeworkItem> {
+                  val result = mutableListOf<HomeworkItem>()
+                  val courses = getCourses()
+                  val now = System.currentTimeMillis()
+                  val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+
+                  val uncompletedKeywords = listOf("未交", "未做", "待做", "未提交", "未完成", "未参与", "退回", "需重做", "打回")
+                  val completedKeywords = listOf(
+                      "已完成", "已提交", "已交", "已参与",
+                      "待批阅", "待批改", "待评", "评阅中", "批改中", "批阅中",
+                      "已批改", "已批阅", "互评", "待互评", "已互评", "分"
+                  )
+
+                  for (c in courses) {
+                      try {
+                          val middleUrl = "https://mooc1.chaoxing.com/visit/stucoursemiddle?courseid=${c.courseId}&clazzid=${c.classId}&cpi=${c.cpi}"
+                          val midReq = Request.Builder()
+                              .url(middleUrl)
+                              .header("User-Agent", userAgent)
+                              .header("Cookie", cookieStr)
+                              .build()
+                          val midRes = client.newCall(midReq).execute()
+                          val midHtml = midRes.body?.string() ?: ""
+
+                          var studentCourseUrl = "https://mooc1.chaoxing.com/mooc-ans/mycourse/studentcourse?courseId=${c.courseId}&clazzid=${c.classId}&cpi=${c.cpi}&v=2&fromMiddle=1"
+                          val scMatcher = Pattern.compile("href=[\"'](/mooc-ans/mycourse/studentcourse[^\"']+)[\"']").matcher(midHtml)
+                          if (scMatcher.find()) {
+                              val rawPath = scMatcher.group(1)!!.replace("&amp;", "&")
+                              studentCourseUrl = "https://mooc1.chaoxing.com$rawPath"
+                          }
+
+                          val scReq = Request.Builder()
+                              .url(studentCourseUrl)
+                              .header("User-Agent", userAgent)
+                              .header("Cookie", cookieStr)
+                              .build()
+                          val scRes = client.newCall(scReq).execute()
+                          val scHtml = scRes.body?.string() ?: ""
+
+                          val encMatcher = Pattern.compile("id=[\"']workEnc[\"']\\s+value=[\"']([^\"']+)[\"']").matcher(scHtml)
+                          val encAltMatcher = Pattern.compile("value=[\"']([^\"']+)[\"']\\s+id=[\"']workEnc[\"']").matcher(scHtml)
+
+                          var workEnc: String? = null
+                          if (encMatcher.find()) {
+                              workEnc = encMatcher.group(1)
+                          } else if (encAltMatcher.find()) {
+                              workEnc = encAltMatcher.group(1)
+                          }
+
+                          if (workEnc.isNullOrBlank()) continue
+
+                          val workUrl = "https://mooc1.chaoxing.com/mooc2/work/list?courseId=${c.courseId}&classId=${c.classId}&cpi=${c.cpi}&enc=$workEnc"
+                          val workReq = Request.Builder()
+                              .url(workUrl)
+                              .header("User-Agent", userAgent)
+                              .header("Referer", studentCourseUrl)
+                              .header("Cookie", cookieStr)
+                              .build()
+
+                          val workRes = client.newCall(workReq).execute()
+                          val workHtml = workRes.body?.string() ?: ""
+
+                          if (workHtml.contains("暂无作业") || workHtml.length < 500) continue
+
+                          val doc = Jsoup.parse(workHtml)
+                          val items = doc.select(".bottomList li, .task-list ul li, .ulDiv li, li[onclick*='goTask']")
+
+                          for (it in items) {
+                              var title = it.select(".overHidden2, .wh-title, .title, h3, h4").text().trim()
+                              var status = it.select(".status, .state").text().trim()
+
+                              val ariaLabel = it.attr("aria-label").trim()
+                              if (ariaLabel.isNotEmpty() && (title.isEmpty() || status.isEmpty())) {
+                                  val parts = ariaLabel.split(";")
+                                  if (parts.size >= 2) {
+                                      if (title.isEmpty()) title = parts[0].trim()
+                                      if (status.isEmpty()) status = parts[1].trim()
+                                  } else if (title.isEmpty()) {
+                                      title = ariaLabel
+                                  }
+                              }
+
+                              if (title.isEmpty()) continue
+                              if (status.isEmpty()) {
+                                  status = if (it.html().contains("notOver")) "未交" else "已截止"
+                              }
+
+                              val timeText = it.select(".time, .end-time, .status-item").text().trim()
+                              var deadlineStr = ""
+                              var sortKey = Long.MAX_VALUE
+                              var isExpired = false
+                              var isUrgent = false
+                              var remainingText = "无截止时间"
+
+                              val remMatch = Pattern.compile("剩余\\s*(\\d+)\\s*小时\\s*(\\d+)?").matcher(timeText)
+                              val remDaysMatch = Pattern.compile("剩余\\s*(\\d+)\\s*天\\s*(\\d+)?").matcher(timeText)
+                              val dateMatch = Pattern.compile("\\d{4}[-/]\\d{1,2}[-/]\\d{1,2}(\\s+\\d{1,2}:\\d{1,2})?").matcher(timeText)
+
+                              var dlMillis = 0L
+                              if (remMatch.find()) {
+                                  val hrs = remMatch.group(1)!!.toLong()
+                                  val mins = if (remMatch.group(2) != null) remMatch.group(2)!!.toLong() else 0L
+                                  dlMillis = now + (hrs * 3600 + mins * 60) * 1000
+                                  deadlineStr = sdf.format(Date(dlMillis))
+                              } else if (remDaysMatch.find()) {
+                                  val days = remDaysMatch.group(1)!!.toLong()
+                                  val hrs = if (remDaysMatch.group(2) != null) remDaysMatch.group(2)!!.toLong() else 0L
+                                  dlMillis = now + (days * 86400 + hrs * 3600) * 1000
+                                  deadlineStr = sdf.format(Date(dlMillis))
+                              } else if (dateMatch.find()) {
+                                  deadlineStr = dateMatch.group(0)!!
+                                  try {
+                                      dlMillis = sdf.parse(deadlineStr)?.time ?: 0L
+                                  } catch (e: Exception) {
+                                      // ignore
+                                  }
+                              } else if (timeText.isNotBlank()) {
+                                  deadlineStr = timeText
+                              }
+
+                              if (dlMillis > 0) {
+                                  val diff = dlMillis - now
+                                  sortKey = diff
+                                  if (diff < 0) {
+                                      isExpired = true
+                                      remainingText = "已截止"
+                                  } else {
+                                      val days = diff / (86400 * 1000)
+                                      val hours = (diff % (86400 * 1000)) / (3600 * 1000)
+                                      val mins = (diff % (3600 * 1000)) / (60 * 1000)
+                                      remainingText = if (days > 0) "剩 ${days} 天 ${hours} 小时"
+                                      else if (hours > 0) "剩 ${hours} 小时 ${mins} 分"
+                                      else "仅剩 ${mins} 分钟！"
+
+                                      if (diff <= 86400 * 1000) {
+                                          isUrgent = true
+                                      }
+                                  }
+                              }
+
+                              val isCompleted = if (uncompletedKeywords.any { status.contains(it) }) {
+                                  false
+                              } else if (completedKeywords.any { status.contains(it) }) {
+                                  true
+                              } else {
+                                  false
+                              }
+
+                              val taskUrl = it.attr("data").ifBlank { workUrl }
+
+                              result.add(
+                                  HomeworkItem(
+                                      id = "cx_${Math.abs((c.courseId + title).hashCode())}",
+                                      platform = "学习通",
+                                      courseName = c.courseName,
+                                      title = title,
+                                      status = status,
+                                      deadline = deadlineStr,
+                                      url = taskUrl,
+                                      isCompleted = isCompleted,
+                                      isExpired = isExpired,
+                                      isUrgent = isUrgent,
+                                      remainingText = remainingText,
+                                      sortKey = sortKey
+                                  )
+                              )
+                          }
+                      } catch (e: Exception) {
+                          e.printStackTrace()
+                      }
+                  }
+                  return result
+              }
+          }
+          EOF
+
+          # 4. 注入优化后的 MainActivity（默认展示全部作业，增加实时提示）
+          cat << 'EOF' > app/src/main/java/com/homework/assistant/MainActivity.kt
+          package com.homework.assistant
+
+          import android.os.Bundle
+          import android.view.LayoutInflater
+          import android.view.View
+          import android.widget.EditText
+          import android.widget.Toast
+          import androidx.appcompat.app.AlertDialog
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.lifecycle.lifecycleScope
+          import androidx.recyclerview.widget.LinearLayoutManager
+          import com.homework.assistant.adapter.HomeworkAdapter
+          import com.homework.assistant.databinding.ActivityMainBinding
+          import com.homework.assistant.model.HomeworkItem
+          import com.homework.assistant.service.ChaoXingService
+          import com.homework.assistant.service.MosoteachService
+          import com.homework.assistant.util.PrefsHelper
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+          import kotlinx.coroutines.withContext
+
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var binding: ActivityMainBinding
+              private lateinit var prefsHelper: PrefsHelper
+              private val adapter = HomeworkAdapter()
+              private var allHomeworks = listOf<HomeworkItem>()
+              private var currentFilter = "all"
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  binding = ActivityMainBinding.inflate(layoutInflater)
+                  setContentView(binding.root)
+
+                  prefsHelper = PrefsHelper(this)
+
+                  binding.rvHomeworks.layoutManager = LinearLayoutManager(this)
+                  binding.rvHomeworks.adapter = adapter
+
+                  binding.swipeRefresh.setOnRefreshListener {
+                      loadHomeworks(forceRemote = true)
+                  }
+
+                  binding.btnSettings.setOnClickListener {
+                      showSettingsDialog()
+                  }
+
+                  binding.chipGroupFilter.setOnCheckedChangeListener { _, checkedId ->
+                      currentFilter = when (checkedId) {
+                          R.id.chipPending -> "pending"
+                          R.id.chipAll -> "all"
+                          R.id.chipChaoXing -> "chaoxing"
+                          R.id.chipMosoteach -> "mosoteach"
+                          R.id.chipCompleted -> "completed"
+                          else -> "all"
+                      }
+                      applyFilter()
+                  }
+
+                  allHomeworks = prefsHelper.getCachedHomeworks()
+                  if (allHomeworks.isNotEmpty()) {
+                      applyFilter()
+                  }
+
+                  if (prefsHelper.chaoXingCookie.isBlank() && prefsHelper.mosoteachCookie.isBlank()) {
+                      showSettingsDialog()
+                  } else {
+                      loadHomeworks(forceRemote = true)
+                  }
+              }
+
+              private fun loadHomeworks(forceRemote: Boolean) {
+                  if (!forceRemote) {
+                      allHomeworks = prefsHelper.getCachedHomeworks()
+                      applyFilter()
+                      return
+                  }
+
+                  binding.swipeRefresh.isRefreshing = true
+                  lifecycleScope.launch(Dispatchers.IO) {
+                      val list = mutableListOf<HomeworkItem>()
+                      var errorMsg: String? = null
+
+                      try {
+                          val cxCookie = prefsHelper.chaoXingCookie
+                          if (cxCookie.isNotBlank()) {
+                              val cxService = ChaoXingService(cxCookie)
+                              val cxItems = cxService.getAllHomeworks()
+                              list.addAll(cxItems)
+                          }
+
+                          val msCookie = prefsHelper.mosoteachCookie
+                          if (msCookie.isNotBlank()) {
+                              val msService = MosoteachService(msCookie)
+                              val msItems = msService.getAllHomeworks()
+                              list.addAll(msItems)
+                          }
+
+                          list.sortWith(compareBy({ it.isCompleted }, { it.isExpired }, { it.sortKey }))
+                      } catch (e: Exception) {
+                          errorMsg = e.message
+                      }
+
+                      withContext(Dispatchers.Main) {
+                          binding.swipeRefresh.isRefreshing = false
+                          if (list.isNotEmpty()) {
+                              allHomeworks = list
+                              prefsHelper.saveCachedHomeworks(list)
+                              binding.chipAll.isChecked = true
+                              currentFilter = "all"
+                              applyFilter()
+                              Toast.makeText(this@MainActivity, "成功同步 ${list.size} 项作业！", Toast.LENGTH_SHORT).show()
+                          } else {
+                              if (errorMsg != null) {
+                                  Toast.makeText(this@MainActivity, "同步出错: $errorMsg", Toast.LENGTH_LONG).show()
+                              } else {
+                                  Toast.makeText(this@MainActivity, "未获取到作业，请检查Cookie是否有效", Toast.LENGTH_LONG).show()
+                              }
+                              if (allHomeworks.isEmpty()) {
+                                  binding.tvEmpty.visibility = View.VISIBLE
+                              }
+                          }
+                      }
+                  }
+              }
+
+              private fun applyFilter() {
+                  val filtered = allHomeworks.filter { item ->
+                      when (currentFilter) {
+                          "pending" -> !item.isCompleted && !item.isExpired
+                          "all" -> true
+                          "chaoxing" -> item.platform == "学习通"
+                          "mosoteach" -> item.platform == "云班课"
+                          "completed" -> item.isCompleted
+                          else -> true
+                      }
+                  }
+
+                  adapter.updateData(filtered)
+                  binding.tvEmpty.visibility = if (filtered.isEmpty()) View.VISIBLE else View.GONE
+
+                  val pendingCount = allHomeworks.count { !it.isCompleted && !it.isExpired }
+                  val urgentCount = allHomeworks.count { it.isUrgent && !it.isCompleted }
+                  val completedCount = allHomeworks.count { it.isCompleted }
+
+                  binding.tvPendingCount.text = pendingCount.toString()
+                  binding.tvUrgentCount.text = urgentCount.toString()
+                  binding.tvCompletedCount.text = completedCount.toString()
+              }
+
+              private fun showSettingsDialog() {
+                  val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_settings, null)
+                  val etCx = dialogView.findViewById<EditText>(R.id.etChaoXingCookie)
+                  val etMs = dialogView.findViewById<EditText>(R.id.etMosoteachCookie)
+
+                  etCx.setText(prefsHelper.chaoXingCookie)
+                  etMs.setText(prefsHelper.mosoteachCookie)
+
+                  AlertDialog.Builder(this)
+                      .setView(dialogView)
+                      .setPositiveButton("保存并同步") { _, _ ->
+                          val newCx = etCx.text.toString().trim()
+                          val newMs = etMs.text.toString().trim()
+                          prefsHelper.chaoXingCookie = newCx
+                          prefsHelper.mosoteachCookie = newMs
+                          Toast.makeText(this, "正在同步云端作业...", Toast.LENGTH_SHORT).show()
+                          loadHomeworks(forceRemote = true)
+                      }
+                      .setNegativeButton("取消", null)
+                      .show()
+              }
+          }
+          EOF
+
+          # 5. 编译出包
           gradle wrapper --gradle-version 8.5
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
