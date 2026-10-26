@@ -19,12 +19,33 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Fix App Icon and Build
+      - name: Prepare and Build APK
         run: |
           cd homework_aggregator_android
-          # 使用安卓系统自带默认图标，彻底解决图标缺失问题
-          sed -i 's|@mipmap/ic_launcher|@android:drawable/sym_def_app_icon|g' app/src/main/AndroidManifest.xml
-          sed -i 's|@mipmap/ic_launcher_round|@android:drawable/sym_def_app_icon|g' app/src/main/AndroidManifest.xml
+          # 1. 自动生成真实的自适应应用图标，解决 AAPT 缺少 mipmap 报错
+          mkdir -p app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
+          cat << 'EOF' > app/src/main/res/drawable/ic_launcher_foreground.xml
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M30,30h48v48h-48z"/>
+          </vector>
+          EOF
+          cat << 'EOF' > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/primary_blue"/>
+              <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+          </adaptive-icon>
+          EOF
+          cp app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+          # 2. 补全 CardView 依赖
+          echo "dependencies { implementation 'androidx.cardview:cardview:1.0.0' }" >> app/build.gradle
+          # 3. 生成 Gradle Wrapper 并开始编译
           gradle wrapper --gradle-version 8.5
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
