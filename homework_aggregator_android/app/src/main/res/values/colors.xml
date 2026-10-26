@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="purple_500">#2563EB</color>
+    <color name="purple_700">#1D4ED8</color>
+    <color name="teal_200">#03DAC5</color>
+    <color name="teal_700">#018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="bg_slate_50">#F8FAFC</color>
+    <color name="text_slate_900">#0F172A</color>
+    <color name="text_slate_500">#64748B</color>
+    <color name="primary_blue">#2563EB</color>
+    <color name="primary_green">#16A34A</color>
+    <color name="badge_red_bg">#FEE2E2</color>
+    <color name="badge_red_text">#DC2626</color>
+    <color name="badge_green_bg">#DCFCE7</color>
+    <color name="badge_green_text">#15803D</color>
+    <color name="badge_amber_bg">#FEF3C7</color>
+    <color name="badge_amber_text">#B45309</color>
+</resources>

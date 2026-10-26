@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="平台账号与Cookie设置"
+        android:textColor="@color/text_slate_900"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="直接粘贴 Cookie 可 100% 避开滑动拼图风控"
+        android:textColor="@color/text_slate_500"
+        android:textSize="12sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="超星学习通 Cookie"
+        android:textColor="@color/primary_blue"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <EditText
+        android:id="@+id/etChaoXingCookie"
+        android:layout_width="match_parent"
+        android:layout_height="80dp"
+        android:layout_marginTop="6dp"
+        android:background="#F8FAFC"
+        android:gravity="top|start"
+        android:hint="粘贴包含 UID、_uid、vc3 的 Cookie 字符串"
+        android:padding="8dp"
+        android:textSize="12sp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="蓝墨云班课 Cookie"
+        android:textColor="@color/primary_green"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <EditText
+        android:id="@+id/etMosoteachCookie"
+        android:layout_width="match_parent"
+        android:layout_height="80dp"
+        android:layout_marginTop="6dp"
+        android:background="#F8FAFC"
+        android:gravity="top|start"
+        android:hint="粘贴包含 PHPSESSID 的 Cookie 字符串"
+        android:padding="8dp"
+        android:textSize="12sp" />
+
+</LinearLayout>
